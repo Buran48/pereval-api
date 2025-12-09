@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 import uvicorn
@@ -48,10 +48,27 @@ class PerevalData(BaseModel):
     images: List[Image]
 
 
+class PerevalUpdate(BaseModel):
+    """Модель для обновления перевала (без данных пользователя)"""
+    beauty_title: Optional[str] = None
+    title: Optional[str] = None
+    other_titles: Optional[str] = None
+    connect: Optional[str] = None
+    add_time: Optional[str] = None
+    coords: Optional[Coords] = None
+    level: Optional[Level] = None
+    images: Optional[List[Image]] = None
+
+
 class ResponseModel(BaseModel):
     status: int
     message: Optional[str] = None
     id: Optional[int] = None
+
+
+class UpdateResponse(BaseModel):
+    state: int  # 1 - успех, 0 - ошибка
+    message: Optional[str] = None
 
 
 @app.post("/submitData", response_model=ResponseModel)
@@ -96,6 +113,59 @@ async def submit_data(pereval: PerevalData):
             message=f"Внутренняя ошибка сервера: {str(e)}",
             id=None
         )
+
+
+@app.get("/submitData/{pereval_id}", response_model=Dict[str, Any])
+async def get_pereval(pereval_id: int):
+    """Получить перевал по ID"""
+    db_manager = DatabaseManager()
+    if not db_manager.connect():
+        raise HTTPException(status_code=500, detail="Ошибка подключения к БД")
+
+    pereval = db_manager.get_pereval(pereval_id)
+    db_manager.disconnect()
+
+    if not pereval:
+        raise HTTPException(status_code=404, detail="Перевал не найден")
+
+    return pereval
+
+
+@app.patch("/submitData/{pereval_id}", response_model=UpdateResponse)
+async def update_pereval(pereval_id: int, update_data: PerevalUpdate):
+    """Обновить перевал (только если статус 'new')"""
+    # Проверяем что есть хоть одно поле для обновления
+    if not update_data.model_dump(exclude_unset=True):
+        return UpdateResponse(state=0, message="Нет данных для обновления")
+
+    # Преобразуем Pydantic модель в dict, убирая None значения
+    update_dict = update_data.model_dump(exclude_unset=True)
+
+    # Проверяем что нет попытки изменить пользователя
+    if 'user' in update_dict:
+        return UpdateResponse(state=0, message="Нельзя изменять данные пользователя")
+
+    db_manager = DatabaseManager()
+    if not db_manager.connect():
+        return UpdateResponse(state=0, message="Ошибка подключения к БД")
+
+    result = db_manager.update_pereval(pereval_id, update_dict)
+    db_manager.disconnect()
+
+    return UpdateResponse(state=result['state'], message=result['message'])
+
+
+@app.get("/submitData/", response_model=List[Dict[str, Any]])
+async def get_user_perevals(user__email: str = Query(..., alias="user__email")):
+    """Получить все перевалы пользователя по email"""
+    db_manager = DatabaseManager()
+    if not db_manager.connect():
+        raise HTTPException(status_code=500, detail="Ошибка подключения к БД")
+
+    perevals = db_manager.get_user_perevals(user__email)
+    db_manager.disconnect()
+
+    return perevals
 
 
 if __name__ == "__main__":
