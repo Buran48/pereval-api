@@ -1,7 +1,7 @@
 import os
 import psycopg2
 from psycopg2 import sql, errors
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from datetime import datetime
 
 
@@ -166,6 +166,231 @@ class DatabaseManager:
             print(f"Ошибка добавления перевала: {e}")
             if self.connection:
                 self.connection.rollback()
+            return None
+
+    def update_pereval(self, pereval_id: int, data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        обновляет перевал если его статус 'new'
+        возвращает {'state': 1/0, 'message': текст}
+        """
+        try:
+            # 1. Проверяем статус перевала
+            self.cursor.execute(
+                "SELECT status FROM pereval_added WHERE id = %s",
+                (pereval_id,)
+            )
+            result = self.cursor.fetchone()
+
+            if not result:
+                return {'state': 0, 'message': 'Перевал не найден'}
+
+            if result[0] != 'new':
+                return {'state': 0, 'message': f'Редактирование запрещено, статус: {result[0]}'}
+
+            # 2. Обновляем координаты
+            coords_data = data['coords']
+            self.cursor.execute(
+                """
+                UPDATE coords c
+                SET latitude = %s, longitude = %s, height = %s
+                FROM pereval_added p
+                WHERE p.id = %s AND p.coord_id = c.id
+                """,
+                (
+                    float(coords_data['latitude']),
+                    float(coords_data['longitude']),
+                    int(coords_data['height']),
+                    pereval_id
+                )
+            )
+
+            # 3. Обновляем данные перевала (только переданные поля)
+            update_fields = []
+            update_values = []
+
+            if 'beauty_title' in data:
+                update_fields.append("beauty_title = %s")
+                update_values.append(data['beauty_title'])
+            if 'title' in data:
+                update_fields.append("title = %s")
+                update_values.append(data['title'])
+            if 'other_titles' in data:
+                update_fields.append("other_titles = %s")
+                update_values.append(data['other_titles'])
+            if 'connect' in data:
+                update_fields.append("connect = %s")
+                update_values.append(data['connect'])
+            if 'add_time' in data:
+                update_fields.append("add_time = %s")
+                update_values.append(data['add_time'])
+
+            # Уровни сложности
+            if 'level' in data:
+                level_data = data['level']
+                if 'winter' in level_data:
+                    update_fields.append("level_winter = %s")
+                    update_values.append(level_data.get('winter', ''))
+                if 'summer' in level_data:
+                    update_fields.append("level_summer = %s")
+                    update_values.append(level_data.get('summer', ''))
+                if 'autumn' in level_data:
+                    update_fields.append("level_autumn = %s")
+                    update_values.append(level_data.get('autumn', ''))
+                if 'spring' in level_data:
+                    update_fields.append("level_spring = %s")
+                    update_values.append(level_data.get('spring', ''))
+
+            # Выполняем update только если есть что обновлять
+            if update_fields:
+                update_sql = f"UPDATE pereval_added SET {', '.join(update_fields)} WHERE id = %s"
+                update_values.append(pereval_id)
+                self.cursor.execute(update_sql, tuple(update_values))
+
+            # 4. Удаляем старые изображения и добавляем новые
+            self.cursor.execute("DELETE FROM images WHERE pereval_id = %s", (pereval_id,))
+
+            for image in data['images']:
+                self.cursor.execute(
+                    "INSERT INTO images (pereval_id, data, title) VALUES (%s, %s, %s)",
+                    (pereval_id, image['data'], image['title'])
+                )
+
+            self.connection.commit()
+            return {'state': 1, 'message': 'Успешно обновлено'}
+
+        except Exception as e:
+            print(f"Ошибка обновления перевала: {e}")
+            if self.connection:
+                self.connection.rollback()
+            return {'state': 0, 'message': f'Ошибка обновления: {str(e)}'}
+
+    def get_user_perevals(self, email: str) -> List[Dict[str, Any]]:
+        """получает все перевалы пользователя по email"""
+        try:
+            sql = """
+            SELECT 
+                p.id, p.beauty_title, p.title, p.other_titles, p.connect, p.add_time,
+                p.level_winter, p.level_summer, p.level_autumn, p.level_spring,
+                p.status,
+                u.email, u.fam, u.name, u.otc, u.phone,
+                c.latitude, c.longitude, c.height
+            FROM pereval_added p
+            JOIN users u ON p.user_id = u.id
+            JOIN coords c ON p.coord_id = c.id
+            WHERE u.email = %s
+            ORDER BY p.add_time DESC
+            """
+
+            self.cursor.execute(sql, (email,))
+            results = self.cursor.fetchall()
+
+            perevals = []
+            for row in results:
+                # Получаем изображения для каждого перевала
+                self.cursor.execute(
+                    "SELECT data, title FROM images WHERE pereval_id = %s",
+                    (row[0],)
+                )
+                images = self.cursor.fetchall()
+
+                pereval_data = {
+                    'id': row[0],
+                    'beauty_title': row[1],
+                    'title': row[2],
+                    'other_titles': row[3],
+                    'connect': row[4],
+                    'add_time': row[5].isoformat() if row[5] else None,
+                    'level': {
+                        'winter': row[6],
+                        'summer': row[7],
+                        'autumn': row[8],
+                        'spring': row[9]
+                    },
+                    'status': row[10],
+                    'user': {
+                        'email': row[11],
+                        'fam': row[12],
+                        'name': row[13],
+                        'otc': row[14],
+                        'phone': row[15]
+                    },
+                    'coords': {
+                        'latitude': float(row[16]),
+                        'longitude': float(row[17]),
+                        'height': row[18]
+                    },
+                    'images': [
+                        {'data': img[0], 'title': img[1]}
+                        for img in images
+                    ]
+                }
+                perevals.append(pereval_data)
+
+            return perevals
+
+        except Exception as e:
+            print(f"Ошибка получения перевалов пользователя: {e}")
+            return []
+
+    def get_pereval(self, pereval_id: int) -> Optional[Dict[str, Any]]:
+        """получает перевал по id"""
+        try:
+            sql = """
+            SELECT 
+                p.id, p.beauty_title, p.title, p.other_titles, p.connect, p.add_time,
+                p.level_winter, p.level_summer, p.level_autumn, p.level_spring,
+                p.status,
+                u.email, u.fam, u.name, u.otc, u.phone,
+                c.latitude, c.longitude, c.height,
+                array_agg(json_build_object('data', i.data, 'title', i.title)) as images
+            FROM pereval_added p
+            JOIN users u ON p.user_id = u.id
+            JOIN coords c ON p.coord_id = c.id
+            LEFT JOIN images i ON p.id = i.pereval_id
+            WHERE p.id = %s
+            GROUP BY p.id, u.id, c.id
+            """
+
+            self.cursor.execute(sql, (pereval_id,))
+            result = self.cursor.fetchone()
+
+            if not result:
+                return None
+
+            # Преобразуем результат в словарь
+            pereval_data = {
+                'id': result[0],
+                'beauty_title': result[1],
+                'title': result[2],
+                'other_titles': result[3],
+                'connect': result[4],
+                'add_time': result[5].isoformat() if result[5] else None,
+                'level': {
+                    'winter': result[6],
+                    'summer': result[7],
+                    'autumn': result[8],
+                    'spring': result[9]
+                },
+                'status': result[10],
+                'user': {
+                    'email': result[11],
+                    'fam': result[12],
+                    'name': result[13],
+                    'otc': result[14],
+                    'phone': result[15]
+                },
+                'coords': {
+                    'latitude': float(result[16]),
+                    'longitude': float(result[17]),
+                    'height': result[18]
+                },
+                'images': result[19] if result[19] and result[19][0] else []
+            }
+
+            return pereval_data
+
+        except Exception as e:
+            print(f"Ошибка получения перевала: {e}")
             return None
 
     def _add_or_get_user(self, user_data: Dict[str, str]) -> Optional[int]:
