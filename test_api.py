@@ -1,3 +1,6 @@
+import pytest
+pytest.skip("для ручного тестирования на локальном сервере", allow_module_level=True)
+
 import requests
 import json
 
@@ -8,17 +11,17 @@ headers = {
 }
 
 data = {
-    "beauty_title": "pereval",
-    "title": "test pereval",
-    "other_titles": "test",
-    "connect": "connects",
+    "beauty_title": "перевал",
+    "title": "тестперевал",
+    "other_titles": "тест",
+    "connect": "соединяет",
     "add_time": "2023-12-06 10:30:00",
     "user": {
-        "email": "test@mail.ru",
-        "fam": "mishin",
-        "name": "misha",
-        "otc": "mikhailovich",
-        "phone": "123456789"
+        "email": "test@example.com",
+        "fam": "тестфамилия",
+        "name": "тестимя",
+        "otc": "тестотчество",
+        "phone": "123"
     },
     "coords": {
         "latitude": "55.7558",
@@ -33,8 +36,8 @@ data = {
     },
     "images": [
         {
-            "data": "test_image",
-            "title": "view"
+            "data": "тестфото",
+            "title": "фото"
         }
     ]
 }

@@ -41,7 +41,7 @@ class PerevalData(BaseModel):
     title: str
     other_titles: str = ""
     connect: str = ""
-    add_time: str
+    add_time: Optional[str] = None
     user: User
     coords: Coords
     level: Level
@@ -90,7 +90,7 @@ async def submit_data(pereval: PerevalData):
                 id=None
             )
 
-        data_dict = pereval.model_dump()
+        data_dict = pereval.dict()
         record_id = db_manager.add_pereval(data_dict)
         db_manager.disconnect()
 
@@ -134,12 +134,13 @@ async def get_pereval(pereval_id: int):
 @app.patch("/submitData/{pereval_id}", response_model=UpdateResponse)
 async def update_pereval(pereval_id: int, update_data: PerevalUpdate):
     """Обновить перевал (только если статус 'new')"""
-    # Проверяем что есть хоть одно поле для обновления
-    if not update_data.model_dump(exclude_unset=True):
-        return UpdateResponse(state=0, message="Нет данных для обновления")
 
-    # Преобразуем Pydantic модель в dict, убирая None значения
-    update_dict = update_data.model_dump(exclude_unset=True)
+    # Получаем dict с переданными полями (без unset)
+    update_dict = update_data.dict(exclude_unset=True)
+
+    # Проверяем что есть хоть одно поле для обновления
+    if not update_dict:
+        return UpdateResponse(state=0, message="Нет данных для обновления")
 
     # Проверяем что нет попытки изменить пользователя
     if 'user' in update_dict:
@@ -153,6 +154,7 @@ async def update_pereval(pereval_id: int, update_data: PerevalUpdate):
     db_manager.disconnect()
 
     return UpdateResponse(state=result['state'], message=result['message'])
+
 
 
 @app.get("/submitData/", response_model=List[Dict[str, Any]])
@@ -170,3 +172,5 @@ async def get_user_perevals(user__email: str = Query(..., alias="user__email")):
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8001)
+
+
